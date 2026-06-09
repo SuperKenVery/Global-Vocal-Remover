@@ -14,9 +14,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          lfs: true
 
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode_16.2.app || true
+
+      - name: Verify model file
+        run: |
+          if head -n 1 Sources/GlobalVocalRemover/Resources/Models/all_rt.onnx | grep -q 'version https://git-lfs.github.com/spec'; then
+            echo "Model file is a Git LFS pointer. The real ONNX model was not checked out." >&2
+            exit 1
+          fi
+          ls -lh Sources/GlobalVocalRemover/Resources/Models/all_rt.onnx
 
       - name: Build app
         run: ./scripts/build_app.sh
