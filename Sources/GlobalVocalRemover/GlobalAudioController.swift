@@ -119,6 +119,8 @@ final class GlobalAudioController {
     }
 
     private func cleanup() {
+        renderBox?.stop()
+
         if originalDefaultOutputID != .unknown {
             try? AudioObjectID.systemObject.setDefaultOutputDevice(originalDefaultOutputID)
         }
