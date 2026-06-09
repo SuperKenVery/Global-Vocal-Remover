@@ -1,0 +1,7 @@
+.build/
+.swiftpm/
+.uv-coreml/
+.venv-coreml/
+DerivedData/
+*.xcuserdata/
+*.xcuserstate
