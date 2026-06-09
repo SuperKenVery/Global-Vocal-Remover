@@ -1,0 +1,39 @@
+name: Build and Release
+
+on:
+  push:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build macOS app
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.2.app || true
+
+      - name: Build app
+        run: ./scripts/build_app.sh
+
+      - name: Package app
+        run: |
+          cd .build
+          ditto -c -k --keepParent GlobalVocalRemover.app GlobalVocalRemover.app.zip
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: build-${{ github.run_number }}-${{ github.sha }}
+        run: |
+          SHORT_SHA="$(git rev-parse --short HEAD)"
+          gh release create "$TAG_NAME" \
+            .build/GlobalVocalRemover.app.zip \
+            --target "$GITHUB_SHA" \
+            --title "Build ${GITHUB_RUN_NUMBER} (${SHORT_SHA})" \
+            --notes "Automated build for commit ${GITHUB_SHA}."

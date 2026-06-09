@@ -15,8 +15,8 @@ rm -rf "$APP"
 mkdir -p "$MACOS" "$RESOURCES"
 cp "$ROOT/.build/release/GlobalVocalRemover" "$MACOS/GlobalVocalRemover"
 
-RESOURCE_BUNDLE="$ROOT/.build/arm64-apple-macosx/release/GlobalVocalRemover_GlobalVocalRemover.bundle"
-if [[ -d "$RESOURCE_BUNDLE" ]]; then
+RESOURCE_BUNDLE="$(find "$ROOT/.build" -path '*/release/GlobalVocalRemover_GlobalVocalRemover.bundle' -type d -print -quit)"
+if [[ -n "$RESOURCE_BUNDLE" ]]; then
   cp -R "$RESOURCE_BUNDLE" "$RESOURCES/"
 fi
 

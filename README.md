@@ -1,58 +1,22 @@
 # Global Vocal Remover
 
-Native macOS menu bar app that captures global system audio with Core Audio Process Tap and runs an RT-DTT vocal-removal ONNX model through ONNX Runtime with the CoreML Execution Provider.
+Global Vocal Remover 是一个 macOS 菜单栏小工具，可以把系统里正在播放的声音实时处理后再输出，尽量削弱人声，适合听歌伴奏、练习翻唱或临时做卡拉 OK。
 
-## Build
+## 下载和使用
 
-The ONNX model is bundled at `Sources/GlobalVocalRemover/Resources/Models/all_rt.onnx`.
+1. 在 GitHub Releases 页面下载最新的 `GlobalVocalRemover.app.zip`。
+2. 解压后打开 `GlobalVocalRemover.app`。
+3. 按系统提示授予音频捕获权限。
+4. 播放音乐、视频或其他系统声音，应用会在后台处理全局音频。
 
-```sh
-./scripts/build_app.sh
-```
+## 系统要求
 
-Run:
+- macOS 14.2 或更新版本。
+- 首次打开如果被 Gatekeeper 拦截，请在“系统设置”里允许打开，或右键应用选择“打开”。
 
-```sh
-open .build/GlobalVocalRemover.app
-```
+## 注意事项
 
-## Verify
+- 神经网络处理音频需要时间，打开后系统音频会有一定延迟
+- 第一批处理结果还没出来时，会放原声。
 
-Run the CPU fallback path:
-
-```sh
-.build/release/GlobalVocalRemover --self-test-cpu
-```
-
-Run ONNX Runtime with CoreML EP:
-
-```sh
-.build/release/GlobalVocalRemover --self-test
-```
-
-## Debug Capture
-
-Capture the system tap input and the rendered output for a fixed duration:
-
-```sh
-.build/release/GlobalVocalRemover --debug-run --duration 10 --debug-dir /tmp/gvr-debug
-```
-
-Analyze the raw float32 stereo files:
-
-```sh
-uv run --python .uv-coreml/bin/python scripts/analyze_debug_capture.py /tmp/gvr-debug
-```
-
-The debug directory contains:
-
-- `capture.f32le`: system audio captured by the Core Audio process tap.
-- `processed.f32le`: audio written by the app to the aggregate output callback.
-- `debug-capture.json`: sample rate, callback counts, and first input/output buffer layout.
-
-## Notes
-
-- The separator model expects 44.1 kHz stereo audio with 31,232-frame output chunks, matching the reference RT-DTT implementation.
-- Device rates such as 48 kHz are handled by a software stereo resampler around the 44.1 kHz model path.
-- ONNX Runtime/CoreML currently partitions this model: most nodes run on CoreML and shape-related nodes remain on CPU.
-- Current processing is a first native prototype. Inference should be moved off the HAL callback thread behind a latency buffer before using it as a daily driver.
+开发和调试说明见 [HACKING.md](HACKING.md)。
