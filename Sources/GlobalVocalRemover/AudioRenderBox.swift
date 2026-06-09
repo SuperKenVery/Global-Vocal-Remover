@@ -279,17 +279,19 @@ enum AudioIOCallbackFactory {
 
 private final class AsyncVocalRemovalPipeline: @unchecked Sendable {
     private static let queueFrames = VocalSeparator.sampleRate * 4
-    private static let maxWorkerBatchSamples = VocalSeparator.outputChunkFrames * VocalSeparator.channels
+    private static let modelChunkSamples = VocalSeparator.outputChunkFrames * VocalSeparator.channels
 
     private let separator: VocalSeparator
     private let sampleRate: UInt32
     private let inputResampler: StereoLinearResampler?
     private let outputResampler: StereoLinearResampler?
+    private let outputStartThresholdSamples: Int
     private let inputQueue: SPSCSampleRing
     private let outputQueue: SPSCSampleRing
     private let semaphore = DispatchSemaphore(value: 0)
     private let running = ManagedAtomic(true)
-    private var pendingDeviceOutput: [Float] = []
+    private var pendingModelInput: [Float] = []
+    private var outputPrimed = false
     private var worker: Thread?
 
     init(separator: VocalSeparator, sampleRate: UInt32) {
@@ -310,6 +312,11 @@ private final class AsyncVocalRemovalPipeline: @unchecked Sendable {
         }
 
         let queueSamples = Int(Self.queueFrames) * VocalSeparator.channels
+        let deviceChunkSamples = Int(
+            (Double(Self.modelChunkSamples) * Double(sampleRate) / Double(VocalSeparator.sampleRate))
+                .rounded(.up)
+        )
+        outputStartThresholdSamples = min(queueSamples / 2, max(Self.modelChunkSamples, deviceChunkSamples * 2))
         inputQueue = SPSCSampleRing(capacity: queueSamples)
         outputQueue = SPSCSampleRing(capacity: queueSamples)
 
@@ -339,26 +346,51 @@ private final class AsyncVocalRemovalPipeline: @unchecked Sendable {
     }
 
     func writeOutput(to outputs: UnsafeMutableAudioBufferListPointer, sampleCount: Int) -> Bool {
-        outputQueue.readStereo(to: outputs, sampleCount: sampleCount)
+        if !outputPrimed {
+            guard outputQueue.availableCount() >= outputStartThresholdSamples else {
+                return false
+            }
+            outputPrimed = true
+        }
+
+        guard outputQueue.readStereo(to: outputs, sampleCount: sampleCount) else {
+            outputPrimed = false
+            return false
+        }
+        return true
     }
 
     private func runWorker() {
         while running.load(ordering: .acquiring) {
             semaphore.wait()
             while running.load(ordering: .relaxed) {
-                let input = inputQueue.readAvailable(maxSamples: Self.maxWorkerBatchSamples)
-                guard !input.isEmpty else { break }
-                let output = process(input)
-                _ = outputQueue.write(output)
+                if sampleRate == VocalSeparator.sampleRate {
+                    guard let input = inputQueue.read(sampleCount: Self.modelChunkSamples) else {
+                        break
+                    }
+                    _ = outputQueue.write(processAtModelRate(input))
+                } else {
+                    let input = inputQueue.readAvailable(maxSamples: Self.modelChunkSamples)
+                    guard !input.isEmpty else { break }
+                    processResampledInput(input)
+                }
             }
         }
     }
 
-    private func process(_ interleavedInput: [Float]) -> [Float] {
-        if sampleRate == VocalSeparator.sampleRate {
-            return processAtModelRate(interleavedInput)
+    private func processResampledInput(_ interleavedInput: [Float]) {
+        guard let inputResampler, let outputResampler else {
+            _ = outputQueue.write(interleavedInput)
+            return
         }
-        return processViaResamplers(interleavedInput)
+
+        pendingModelInput.append(contentsOf: inputResampler.process(interleavedInput))
+        while pendingModelInput.count >= Self.modelChunkSamples {
+            let modelChunk = Array(pendingModelInput.prefix(Self.modelChunkSamples))
+            pendingModelInput.removeFirst(Self.modelChunkSamples)
+            let modelOutput = processAtModelRate(modelChunk)
+            _ = outputQueue.write(outputResampler.process(modelOutput))
+        }
     }
 
     private func processAtModelRate(_ interleavedInput: [Float]) -> [Float] {
@@ -372,43 +404,6 @@ private final class AsyncVocalRemovalPipeline: @unchecked Sendable {
             sampleRate: VocalSeparator.sampleRate
         )
         return interleavedOutput
-    }
-
-    private func processViaResamplers(_ interleavedInput: [Float]) -> [Float] {
-        guard let inputResampler, let outputResampler else {
-            return interleavedInput
-        }
-
-        let modelInput = inputResampler.process(interleavedInput)
-        if !modelInput.isEmpty {
-            let modelFrames = modelInput.count / VocalSeparator.channels
-            var modelOutput = [Float](repeating: 0, count: modelInput.count)
-            separator.process(
-                input: modelInput,
-                output: &modelOutput,
-                frames: modelFrames,
-                channels: VocalSeparator.channels,
-                sampleRate: VocalSeparator.sampleRate
-            )
-            pendingDeviceOutput.append(contentsOf: outputResampler.process(modelOutput))
-        }
-
-        let targetSamples = interleavedInput.count
-        if pendingDeviceOutput.count >= targetSamples {
-            let output = Array(pendingDeviceOutput.prefix(targetSamples))
-            pendingDeviceOutput.removeFirst(targetSamples)
-            return output
-        }
-
-        var output = pendingDeviceOutput
-        pendingDeviceOutput.removeAll(keepingCapacity: true)
-        output.append(
-            contentsOf: interleavedInput.dropFirst(output.count).prefix(targetSamples - output.count)
-        )
-        if output.count < targetSamples {
-            output.append(contentsOf: repeatElement(Float(0), count: targetSamples - output.count))
-        }
-        return output
     }
 }
 
@@ -511,6 +506,19 @@ private final class SPSCSampleRing: @unchecked Sendable {
         return false
     }
 
+    func read(sampleCount: Int) -> [Float]? {
+        let read = readIndex.load(ordering: .relaxed)
+        let write = writeIndex.load(ordering: .acquiring)
+        guard write - read >= sampleCount else { return nil }
+
+        var output = [Float](repeating: 0, count: sampleCount)
+        for index in 0..<sampleCount {
+            output[index] = storage[(read + index) % capacity]
+        }
+        readIndex.store(read + sampleCount, ordering: .releasing)
+        return output
+    }
+
     func readAvailable(maxSamples: Int) -> [Float] {
         let read = readIndex.load(ordering: .relaxed)
         let write = writeIndex.load(ordering: .acquiring)
@@ -523,6 +531,12 @@ private final class SPSCSampleRing: @unchecked Sendable {
         }
         readIndex.store(read + count, ordering: .releasing)
         return output
+    }
+
+    func availableCount() -> Int {
+        let read = readIndex.load(ordering: .acquiring)
+        let write = writeIndex.load(ordering: .acquiring)
+        return write - read
     }
 
     private func reserveWrite(_ count: Int) -> Bool {
