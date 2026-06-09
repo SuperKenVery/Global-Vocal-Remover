@@ -1,6 +1,10 @@
 # Global Vocal Remover
 
-Global Vocal Remover 是一个 macOS 菜单栏小工具，可以把系统里正在播放的声音实时处理后再输出，尽量削弱人声，适合听歌伴奏、练习翻唱或临时做卡拉 OK。
+Global Vocal Remover 是一个 macOS 菜单栏小工具，可以把系统里正在播放的声音实时处理后再输出，去除人声。
+
+| Menu bar menu | Control page | 
+| -------- | -------- | 
+| <img alt="image" src="https://github.com/user-attachments/assets/9c407ee3-dae5-4567-bda2-b7db8a2af66e" />  | <img alt="image" src="https://github.com/user-attachments/assets/69e63407-b22a-443c-9641-be52bd38728d" /> | 
 
 ## 下载和使用
 
